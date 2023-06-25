@@ -69,10 +69,45 @@ Sys.sleep(20)
 fa_contract_data = rbind(fa_contract_data, df)
 }
 
-rm(df, form, session, url, urls_fa, y)
+rm(df, form, url, urls_fa, y)
+
+#scrape this years FAs
+urls_2023 = 'https://www.spotrac.com/nba/free-agents/2023'
+
+df_2023 = session %>% session_jump_to(urls_2023) %>% read_html() %>%
+  html_element(xpath = '//*[(@id = "main")]') %>%
+  html_table() %>%
+  row_to_names(row_number = 1) %>%
+  rename(Player = 1,
+         From = Team) %>%
+  mutate(Player = gsub("\n", "", Player),
+         Player = str_squish(Player),
+         Player = sub("Jr. ", "", Player),
+         Player = sub("IV ", "", Player),
+         Player = sub("III ", "", Player),
+         Player = ifelse(str_detect(Player, "-"),
+                         sub("-", "", Player),
+                         Player),
+         Player = sub("^\\w+\\s", "", Player),
+         Type = substr(Type, 1, 3),
+         To = NA,
+         Yrs = NA,
+         Value = NA,
+         AAV = NA,
+         MaxVal = NA,
+         offseason = 2023,
+         Player_join = stringi::stri_trans_general(Player, "Latin-ASCII"),
+         Player_join = standardize_name(Player_join)) %>%
+  filter(Type == "UFA" | Type == "RFA") %>%
+  select(colnames(fa_contract_data))
+
+fa_contract_data = rbind(df_2023, fa_contract_data)
+
+rm(df_2023, session, urls_2023)
+
 
 #scrape sr stats
-years = 2012:2022
+years = 2012:2023
 for(y in years){
 sr_total_url = paste0('https://www.basketball-reference.com/leagues/NBA_', y ,'_totals.html')
 
@@ -154,7 +189,7 @@ sr_season_stats= sr_season_stats %>%
                    dunk_a_fga, corner3_3pa, corner3fg_percent)), ~ifelse(is.na(.), 0, .))
 
 #for each offseason year, create a data set for the prior two regular seasons
-years = 2013:2022
+years = 2013:2023
 sr_twoyr_dataset = data.frame()
 for(y in years){
   player_twoyr_stats_totals = sr_season_stats %>%
