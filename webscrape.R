@@ -90,6 +90,7 @@ df_2023 = session %>% session_jump_to(urls_2023) %>% read_html() %>%
                          Player),
          Player = sub("^\\w+\\s", "", Player),
          Type = substr(Type, 1, 3),
+         Age = as.numeric(Age),
          To = NA,
          Yrs = NA,
          Value = NA,
@@ -258,3 +259,20 @@ free_agents_stats = fa_contract_data %>%
   left_join(sr_twoyr_dataset, by=c('Player_join' = 'player_join', 'offseason')) %>%
   filter(!is.na(g)) %>%
   select(-c(Player_join, player))
+
+
+
+#add salary cap amount by year
+cap_url = 'https://www.spotrac.com/nba/cba/'
+
+cap_by_year = read_html(cap_url) %>%
+  html_table() %>% .[[1]] %>%
+  select(1, CapMax = 2) %>%
+  mutate(CapMax = gsub("[^0-9]", "", CapMax) %>% as.numeric())
+
+#join to dataset and find AAV as pct of cap
+free_agents_stats = free_agents_stats %>%
+  left_join(cap_by_year, by = c("offseason" = "Year")) %>%
+  mutate(aav_pct_cap = AAV / CapMax) %>%
+  relocate(CapMax, .after = MaxVal) %>%
+  relocate(aav_pct_cap, .after = CapMax)
