@@ -276,3 +276,5 @@ free_agents_stats = free_agents_stats %>%
   mutate(aav_pct_cap = AAV / CapMax) %>%
   relocate(CapMax, .after = MaxVal) %>%
   relocate(aav_pct_cap, .after = CapMax)
+
+write.csv(free_agents_stats, file = "free_agents_stats.csv", row.names = FALSE)
