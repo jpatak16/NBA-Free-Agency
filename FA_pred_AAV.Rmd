@@ -1,0 +1,82 @@
+---
+title: "FA_Pred_AAV"
+author: "Jeremy Patak"
+date: "2023-06-26"
+output: html_document
+---
+
+```{r}
+library(pacman)
+p_load(tidyverse, rsample, recipes, parsnip, workflows, tune, yardstick, ranger, vip, kknn, xgboost, glmnet)
+
+free_agents_stats = read.csv('free_agents_stats.csv') %>%
+  mutate(Pos = case_when(pg_percent>sg_percent & pg_percent>sf_percent & pg_percent>pf_percent & pg_percent>c_percent ~ "PG",
+                         sg_percent>pg_percent & sg_percent>sf_percent & sg_percent>pf_percent & sg_percent>c_percent ~ "SG",
+                         sf_percent>pg_percent & sf_percent>sg_percent & sf_percent>pf_percent & sf_percent>c_percent ~ "SF",
+                         pf_percent>pg_percent & pf_percent>sg_percent & pf_percent>sf_percent & pf_percent>c_percent ~ "PF",
+                         c_percent>pg_percent & c_percent>sg_percent & c_percent>sf_percent & c_percent>pf_percent ~ "C",
+                         .default = Pos.),
+         versatility = case_when(Pos=="PG" ~ 1-pg_percent,
+                                 Pos=="SG" ~ 1-sg_percent,
+                                 Pos=="SF" ~ 1-sf_percent,
+                                 Pos=="PF" ~ 1-pf_percent,
+                                 Pos=="C" ~ 1-c_percent)) %>%
+  select(-Pos.)
+
+yr_preds = read.csv("yrs_preds.csv")
+
+df_2023 = free_agents_stats %>% filter(offseason == '2023') %>% select(-Yrs) %>% left_join(yr_preds)
+fa_data = free_agents_stats %>% filter(offseason != '2023')
+
+fa_data = fa_data %>%
+  mutate(Yrs = as.factor(Yrs)) %>%
+  mutate_at(vars(c(mp:pts, bad_pass:made_dunks)), ~ . / g) %>%
+  select(-c(From:To, Value:CapMax))
+
+fa_data = recipe(aav_pct_cap ~ ., data = fa_data) %>%
+  update_role(Player, offseason, new_role = 'ID') %>%
+  step_impute_knn(all_predictors(), neighbors = 10) %>%
+  step_filter(offseason != '2016') %>%
+  prep() %>% juice()
+
+#cv groups
+cv_data = fa_data %>% vfold_cv(v=3, repeats = 2) #assign observations to cv folds
+```
+
+#Model 3 (Pred AAV, Lasso)
+```{r}
+
+rec2 = recipe(aav_pct_cap ~ Type + Pos + Yrs + mp + g + gs + Age + pts + ows + dws + ws + fg_pct + x3p_pct + efg_pct + x3par + corner3a_3pa + corner3_pct + per + orb_percent + drb_percent + trb_percent + ast_percent + stl_percent+ blk_percent + usg_percent + obpm + dbpm + bpm + vorp + on_off + versatility, data = fa_data) %>%
+  step_dummy(Type, Pos, Yrs) %>%
+  step_corr() %>%
+  step_interact(terms = ~ Age:all_predictors())
+
+
+mod_las1 = linear_reg(penalty = tune(), mixture = 1) %>%
+  set_engine('glmnet')
+
+wf3 = workflow() %>% add_model(mod_las1) %>% add_recipe(rec2)
+
+fit_las1 = wf3 %>% tune_grid(cv_data,
+                            grid = expand.grid(penalty = 10^seq(-7,3, length.out=100)),
+                            metrics = metric_set(rmse, mae))
+
+ac3 = fit_las1 %>% show_best(metric = 'rmse', n=200)
+
+final_wf_las1 = wf3 %>% finalize_workflow(select_best(fit_las1, metric = "rmse"))
+final_fit_las1 = final_wf_las1 %>% fit(data = fa_data)
+```
+
+#Make preds on this year FA class
+```{r}
+df_2023 = df_2023 %>%
+  mutate(Yrs = as.factor(Yrs)) %>%
+  mutate_at(vars(c(mp:pts, bad_pass:made_dunks)), ~ . / g) %>%
+  select(-c(From:To, Value:CapMax))
+
+
+preds = df_2023 %>%
+  mutate(aav_pct_cap = final_fit_las1 %>% predict(new_data = df_2023) %>% unlist()) %>%
+  mutate(aav = aav_pct_cap*136000000) %>%
+  select(Player, Yrs, aav)
+```

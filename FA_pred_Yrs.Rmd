@@ -1,0 +1,108 @@
+---
+title: "FA_Pred_Yrs"
+author: "Jeremy Patak"
+date: "2023-06-26"
+output: html_document
+---
+
+```{r}
+library(pacman)
+p_load(tidyverse, rsample, recipes, parsnip, workflows, tune, yardstick, ranger, vip, kknn, xgboost)
+
+free_agents_stats = read.csv('free_agents_stats.csv') %>%
+  mutate(Pos = case_when(pg_percent>sg_percent & pg_percent>sf_percent & pg_percent>pf_percent & pg_percent>c_percent ~ "PG",
+                         sg_percent>pg_percent & sg_percent>sf_percent & sg_percent>pf_percent & sg_percent>c_percent ~ "SG",
+                         sf_percent>pg_percent & sf_percent>sg_percent & sf_percent>pf_percent & sf_percent>c_percent ~ "SF",
+                         pf_percent>pg_percent & pf_percent>sg_percent & pf_percent>sf_percent & pf_percent>c_percent ~ "PF",
+                         c_percent>pg_percent & c_percent>sg_percent & c_percent>sf_percent & c_percent>pf_percent ~ "C",
+                         .default = Pos.),
+         versatility = case_when(Pos=="PG" ~ 1-pg_percent,
+                                 Pos=="SG" ~ 1-sg_percent,
+                                 Pos=="SF" ~ 1-sf_percent,
+                                 Pos=="PF" ~ 1-pf_percent,
+                                 Pos=="C" ~ 1-c_percent)) %>%
+  select(-Pos.)
+
+df_2023 = free_agents_stats %>% filter(offseason == '2023')
+fa_data = free_agents_stats %>% filter(offseason != '2023')
+
+fa_data = fa_data %>%
+  mutate(Yrs = as.factor(Yrs)) %>%
+  mutate_at(vars(c(mp:pts, bad_pass:made_dunks)), ~ . / g) %>%
+  select(-c(From:To, Value:CapMax))
+
+fa_data = recipe(Yrs ~ ., data = fa_data) %>%
+  update_role(Player, offseason, new_role = 'ID') %>%
+  step_impute_knn(all_predictors(), neighbors = 10) %>%
+  step_filter(offseason > '2017') %>%
+  prep() %>% juice()
+
+#cv groups
+cv_data = fa_data %>% vfold_cv(v=3, repeats = 2) #assign observations to cv folds
+```
+
+
+#Model 1 (Pred Years, RF)
+```{r}
+rec1 = recipe(Yrs ~ ., data = fa_data) %>%
+  update_role(Player, offseason, new_role = 'ID') %>%
+  step_corr() %>%
+  step_rm(aav_pct_cap)
+
+mod_rf1 = rand_forest(mtry = tune(), min_n = tune(), trees = tune()) %>%
+  set_engine('ranger', importance = 'impurity') %>%
+  set_mode('classification')
+
+wf1 = workflow() %>% add_model(mod_rf1) %>% add_recipe(rec1)
+
+fit_rf1 = wf1 %>% tune_grid(cv_data,
+                            grid = expand.grid(mtry = c(5, 10, 15),
+                                               min_n = c(20, 30, 40),
+                                               trees = c(250, 1000)),
+                            metrics = metric_set(accuracy, f_meas, roc_auc))
+
+ac1 = fit_rf1 %>% show_best(metric = 'accuracy', n=200)
+
+final_wf_rf1 = wf1 %>% finalize_workflow(select_best(fit_rf1, metric = "accuracy"))
+final_fit_rf1 = final_wf_rf1 %>% fit(data = fa_data)
+
+final_fit_rf1 %>% 
+  extract_fit_parsnip() %>%
+  vip(num_features = 25)
+```
+
+
+
+#Model 2 (Pred Years, KNN)
+```{r}
+rec2 = recipe(Yrs ~ Type + Age + ws + vorp + Pos + mp, data = fa_data)
+
+mod_knn1 = nearest_neighbor(neighbors = tune()) %>%
+  set_engine('kknn') %>%
+  set_mode('classification')
+
+wf2 = workflow() %>% add_model(mod_knn1) %>% add_recipe(rec2)
+
+fit_knn1 = wf2 %>% tune_grid(cv_data,
+                            grid = expand.grid(neighbors = c(seq(1, 100, by=1))),
+                            metrics = metric_set(accuracy, f_meas, roc_auc))
+
+ac2 = fit_knn1 %>% show_best(metric = 'accuracy', n=200)
+
+final_wf_knn1 = wf2 %>% finalize_workflow(select_best(fit_knn1, metric = "accuracy"))
+final_fit_knn1 = final_wf_knn1 %>% fit(data = fa_data)
+```
+
+
+
+#Make preds on this year FA class
+```{r}
+df_2023 = df_2023 %>%
+  mutate(Yrs = as.factor(Yrs)) %>%
+  mutate_at(vars(c(mp:pts, bad_pass:made_dunks)), ~ . / g) %>%
+  select(-c(From:To, Value:CapMax))
+
+preds = df_2023 %>%
+  mutate(Yrs = final_fit_knn1 %>% predict(new_data = df_2023) %>% unlist()) %>%
+  select(Player, Yrs)
+```
