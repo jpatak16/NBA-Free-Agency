@@ -20,7 +20,7 @@ standardize_name = Vectorize(standardize_name)
 library(pacman)
 p_load(tidyverse, rvest, janitor)
 
-years = 2013:2022
+years = 2023
 
 fa_contract_data = data.frame()
 sr_season_stats = data.frame()
@@ -28,12 +28,13 @@ sr_season_stats = data.frame()
 url = paste0('https://www.spotrac.com/nba/free-agents/2016')
 
 #sign into spotrac
-session = session(url)
-form = html_form(session)[[3]]
+session = session(url, httr::user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"))
+form = html_form(session)[[1]]
 form = form %>% html_form_set(email = Sys.getenv("SPOTRAC_EMAIL"), password = Sys.getenv("SPOTRAC_PW"))
 
 session = session_submit(session, form)
 
+### This script doesn't completely work right due to spotrac site changes, needs some rewriting to be used again
 
 #scrape spotrac FA list
 for(y in years){
@@ -41,8 +42,7 @@ urls_fa = paste0('https://www.spotrac.com/nba/free-agents/', y)
 
 df = session %>% session_jump_to(urls_fa) %>% read_html() %>%
   html_element(xpath = '//*[(@id = "main")]') %>%
-  html_table() %>% 
-  row_to_names(row_number = 1) %>%
+  html_table()
   rename(Player = 1,
          AAV = 'Avg. Salary',
          MaxVal = 'Max Value') %>%
@@ -72,7 +72,7 @@ fa_contract_data = rbind(fa_contract_data, df)
 rm(df, form, url, urls_fa, y)
 
 #scrape this years FAs
-urls_2023 = 'https://www.spotrac.com/nba/free-agents/2023'
+urls_2023 = 'https://www.spotrac.com/nba/free-agents/2025'
 
 df_2023 = session %>% session_jump_to(urls_2023) %>% read_html() %>%
   html_element(xpath = '//*[(@id = "main")]') %>%
